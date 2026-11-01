@@ -103,7 +103,7 @@ def run(subset: str, seed: int, epochs: int = 80, batch_size: int = 128, learnin
     baseline_val = baseline.predict(window_features(X_val))
 
     MODELS_DIR.mkdir(exist_ok=True)
-    model.save(MODELS_DIR / f"{subset}_seed{seed}.keras")
+    model.save(MODELS_DIR / f"{subset}_lr{learning_rate:g}_seed{seed}.keras")
 
     val_loss = history.history["val_loss"]
     best_epoch = int(np.argmin(val_loss)) + 1

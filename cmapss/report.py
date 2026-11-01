@@ -15,6 +15,9 @@ from pathlib import Path
 
 import numpy as np
 
+from cmapss.data import RUL_CAP
+from cmapss.metrics import phm08_score
+
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = ROOT / "results"
 
@@ -40,17 +43,26 @@ def select(by_lr: dict[float, list[dict]]) -> float:
     return min(by_lr, key=lambda lr: np.mean([r["training"]["val_rmse"] for r in by_lr[lr]]))
 
 
+def phm08_capped_truth(result: dict) -> float:
+    """PHM08 against the official remaining life capped at RUL_CAP, from the saved per-engine
+    predictions (stored to 0.01 cycles)."""
+    true, pred = (np.asarray(result["per_engine"][k], float) for k in ("true", "pred"))
+    return phm08_score(np.minimum(true, RUL_CAP), pred)
+
+
 def _row(label: str, results: list[dict]) -> str:
     h = [r["test"]["hybrid"] for r in results]
+    b = [r["test"]["ridge_baseline"] for r in results]
     return (f"| {label} | {len(results)} | {_ms([r['training']['val_rmse'] for r in results])} "
-            f"| {_ms([x['rmse'] for x in h])} | {_ms([x['rmse_capped_truth'] for x in h])} "
-            f"| {_ms([x['phm08_score'] for x in h], 0)} "
-            f"| {_ms([r['test']['ridge_baseline']['rmse'] for r in results])} "
+            f"| {_ms([x['rmse'] for x in h])} | {_ms([x['rmse'] for x in b])} "
+            f"| {_ms([x['rmse_capped_truth'] for x in h])} | {_ms([x['rmse_capped_truth'] for x in b])} "
+            f"| {_ms([x['phm08_score'] for x in h], 0)} | {_ms([phm08_capped_truth(r) for r in results], 0)} "
             f"| {_ms([100 * r['test']['mc_coverage_2sd'] for r in results], 0)}% |")
 
 
-HEADER = ("| {first} | Seeds | Validation RMSE (capped) | Test RMSE | Test RMSE (capped truth) | PHM08 score "
-          "| Ridge baseline test RMSE | MC ±2σ coverage |\n|---|---|---|---|---|---|---|---|")
+HEADER = ("| {first} | Seeds | Validation RMSE | Test RMSE | Ridge test RMSE | Test RMSE (capped truth) "
+          "| Ridge (capped truth) | PHM08 | PHM08 (capped truth) | MC ±2σ coverage |\n"
+          "|---|---|---|---|---|---|---|---|---|---|")
 
 
 def render(runs: dict[str, dict[float, list[dict]]]) -> str:
@@ -61,8 +73,11 @@ def render(runs: dict[str, dict[float, list[dict]]]) -> str:
         "",
         "One model per subset and seed, scored on each official test engine's last window. Values are mean ± sample "
         "standard deviation over seeds. Test RMSE uses the official remaining life; \"capped truth\" also caps it at "
-        "125 cycles, as many papers do, because the model is trained on targets capped there. The learning rate for "
-        "each subset was chosen by validation RMSE on held-out training engines, never by test results.",
+        "125 cycles, as many papers do, because the model is trained on targets capped there. The ridge baseline is a "
+        "linear model on each window's per-feature mean, last value and slope, fitted on the same engines. PHM08 "
+        "penalises late predictions more than early ones and is summed over engines, so it grows with the number of "
+        "test engines. The learning rate for each subset was chosen by validation RMSE (capped targets, held-out "
+        "training engines), never by test results.",
         "",
         HEADER.format(first="Subset (learning rate)"),
     ]
@@ -75,15 +90,17 @@ def render(runs: dict[str, dict[float, list[dict]]]) -> str:
         for lr, results in by_lr.items():
             lines.append(_row(f"{subset}, {lr:g}{' (selected)' if lr == chosen else ''}", results))
     lines += ["", "## Data and training (selected configuration)", "",
-              "| Subset | Train / val / test engines | Test engines shorter than the window | Train windows | "
-              "Conditions | Features | Best epoch | Training time |",
-              "|---|---|---|---|---|---|---|---|"]
+              "| Subset | Train / val / test engines | Test engines shorter than the window | Test engines above "
+              "the cap | Train windows | Conditions | Features | Best epoch | Training time |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for subset, by_lr in runs.items():
         results = by_lr[select(by_lr)]
         r, d = results[0], results[0]["data"]
+        above = int((np.asarray(r["per_engine"]["true"]) > RUL_CAP).sum())
         lines.append(
             f"| {subset} | {d['train_engines']} / {d['val_engines']} / {d['test_engines']} "
-            f"| {d['test_engines_shorter_than_window']} | {d['train_windows']:,} | {len(r['config']['conditions'])} "
+            f"| {d['test_engines_shorter_than_window']} | {above} | {d['train_windows']:,} "
+            f"| {len(r['config']['conditions'])} "
             f"| {len(r['config']['features'])} | {_ms([x['training']['best_epoch'] for x in results], 0)} "
             f"| {_ms([x['training']['seconds'] / 60 for x in results], 0)} min |")
     first = next(iter(next(iter(runs.values())).values()))[0]
@@ -92,7 +109,7 @@ def render(runs: dict[str, dict[float, list[dict]]]) -> str:
               f"{int(first['config']['val_fraction'] * 100)}% of training engines held out for early stopping, "
               f"batch {first['config']['batch_size']}, {first['config']['mc_passes']} MC-dropout passes. "
               f"TensorFlow {first['environment']['tensorflow']}, Keras {first['environment']['keras']}, "
-              f"Python {first['environment']['python']}, CPU. Code: commit {', '.join(commits)}.", ""]
+              f"Python {first['environment']['python']}, CPU. Runs produced by commit {', '.join(commits)}.", ""]
     return "\n".join(lines)
 
 
@@ -111,6 +128,7 @@ def figure(runs: dict[str, dict[float, list[dict]]], path: Path) -> None:
         ax.errorbar(x, pred[order], yerr=2 * std[order], fmt="o", markersize=2.5, color="#2a78d6",
                     ecolor="#9fc2ec", elinewidth=0.8, label="predicted ± 2σ (MC dropout)")
         ax.plot(x, true[order], color="#eb6834", linewidth=2, label="true RUL")
+        ax.axhline(RUL_CAP, color="#8a8984", linewidth=1, linestyle="--", label=f"training cap ({RUL_CAP})")
         ax.set_title(f"{subset}: test engines sorted by true RUL", fontsize=10, loc="left")
         ax.set_xlabel("test engine (sorted)")
         ax.set_ylabel("remaining useful life (cycles)")
