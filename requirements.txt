@@ -1,0 +1,8 @@
+# Pinned to the versions the committed results came from (Python 3.11, CPU).
+tensorflow==2.21.0
+keras==3.15.1
+numpy==2.4.6
+pandas==3.1.0
+scikit-learn==1.9.1
+matplotlib==3.11.2
+pytest==9.2.0
