@@ -58,11 +58,17 @@ def build_hybrid(window: int, n_features: int, dropout: float = 0.2, learning_ra
 
 
 def mc_dropout_predict(model: keras.Model, X: np.ndarray, passes: int = 50, scale: float = 1.0,
-                       batch_size: int = 512) -> tuple[np.ndarray, np.ndarray]:
-    """Mean and standard deviation over `passes` forward passes with dropout left on."""
+                       batch_size: int = 512, compiled: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Mean and standard deviation over `passes` forward passes with dropout left on. `compiled` traces the
+    forward pass into a graph: about 4x faster on CPU, same dropout, but different random masks from the
+    eager path."""
+    forward = lambda x: model(x, training=True)  # noqa: E731
+    if compiled:
+        import tensorflow as tf
+        forward = tf.function(forward, reduce_retracing=True)
     draws = []
     for _ in range(passes):
-        outs = [np.asarray(model(X[i:i + batch_size], training=True)).ravel()
+        outs = [np.asarray(forward(X[i:i + batch_size])).ravel()
                 for i in range(0, len(X), batch_size)]
         draws.append(np.concatenate(outs) * scale)
     draws = np.stack(draws)

@@ -89,6 +89,26 @@ def render(runs: dict[str, dict[float, list[dict]]]) -> str:
         chosen = select(by_lr)
         for lr, results in by_lr.items():
             lines.append(_row(f"{subset}, {lr:g}{' (selected)' if lr == chosen else ''}", results))
+    calibrated = {s: by_lr[select(by_lr)] for s, by_lr in runs.items()
+                  if all("calibration" in r for r in by_lr[select(by_lr)])}
+    if calibrated:
+        lines += ["", "## Uncertainty (selected configuration)", "",
+                  "Monte Carlo dropout spreads are too narrow on their own. Split conformal calibration on the "
+                  "validation engines rescales them: q is the conformal 95% quantile of |target − prediction| / std "
+                  "over validation windows, and each test interval is prediction ± q·std. Validation targets are "
+                  "capped at 125, so coverage of the capped truth is what the calibration aims at.", "",
+                  "| Subset | MC ±2σ coverage | Conformal scale q | Validation coverage | Test coverage (capped truth) "
+                  "| Test coverage (official truth) | Mean interval half-width |",
+                  "|---|---|---|---|---|---|---|"]
+        for subset, results in calibrated.items():
+            t = [r["test"] for r in results]
+            lines.append(
+                f"| {subset} | {_ms([100 * x['mc_coverage_2sd'] for x in t], 0)}% "
+                f"| {_ms([r['calibration']['scale'] for r in results])} "
+                f"| {_ms([100 * r['calibration']['validation_coverage'] for r in results], 1)}% "
+                f"| {_ms([100 * x['conformal_coverage_capped_truth'] for x in t], 0)}% "
+                f"| {_ms([100 * x['conformal_coverage'] for x in t], 0)}% "
+                f"| {_ms([x['conformal_mean_halfwidth'] for x in t], 1)} cycles |")
     lines += ["", "## Data and training (selected configuration)", "",
               "| Subset | Train / val / test engines | Test engines shorter than the window | Test engines above "
               "the cap | Train windows | Conditions | Features | Best epoch | Training time |",
@@ -121,12 +141,17 @@ def figure(runs: dict[str, dict[float, list[dict]]], path: Path) -> None:
     fig, axes = plt.subplots(1, len(runs), figsize=(4.2 * len(runs), 4.2), dpi=130, squeeze=False)
     for ax, (subset, by_lr) in zip(axes[0], runs.items()):
         chosen = select(by_lr)
-        r = min(by_lr[chosen], key=lambda x: x["seed"])["per_engine"]
+        run = min(by_lr[chosen], key=lambda x: x["seed"])
+        r = run["per_engine"]
         true, pred, std = (np.asarray(r[k], float) for k in ("true", "pred", "mc_std"))
+        if "calibration" in run:
+            k, label = run["calibration"]["scale"], "predicted, conformal 95% interval"
+        else:
+            k, label = 2.0, "predicted ± 2σ (MC dropout)"
         order = np.argsort(true)
         x = np.arange(len(true))
-        ax.errorbar(x, pred[order], yerr=2 * std[order], fmt="o", markersize=2.5, color="#2a78d6",
-                    ecolor="#9fc2ec", elinewidth=0.8, label="predicted ± 2σ (MC dropout)")
+        ax.errorbar(x, pred[order], yerr=k * std[order], fmt="o", markersize=2.5, color="#2a78d6",
+                    ecolor="#9fc2ec", elinewidth=0.8, label=label)
         ax.plot(x, true[order], color="#eb6834", linewidth=2, label="true RUL")
         ax.axhline(RUL_CAP, color="#8a8984", linewidth=1, linestyle="--", label=f"training cap ({RUL_CAP})")
         ax.set_title(f"{subset}: test engines sorted by true RUL", fontsize=10, loc="left")

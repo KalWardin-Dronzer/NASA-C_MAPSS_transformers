@@ -7,6 +7,13 @@ Validation engines are held out whole, and the normaliser is fitted on the
 training engines only. The official test set is scored once, on each engine's
 last window, against the official remaining life (uncapped). Results go to
 results/runs/<subset>_lr<rate>_seed<seed>.json.
+
+Uncertainty is calibrated by split conformal prediction on the validation
+engines: each validation window's score is |target - prediction| / MC-dropout
+std, q is the conformal 95% quantile of those scores, and each test interval is
+prediction ± q·std. Validation targets are capped at RUL_CAP, so the intervals
+aim to cover the capped remaining life. This method was fixed, and committed,
+before any calibrated test coverage was computed.
 """
 
 import argparse
@@ -21,13 +28,14 @@ import numpy as np
 
 from cmapss.data import (RUL_CAP, WINDOW, Normaliser, last_windows, load_subset, split_engines,
                          training_windows)
-from cmapss.metrics import interval_coverage, mae, phm08_score, rmse
+from cmapss.metrics import conformal_scale, interval_coverage, mae, phm08_score, rmse
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("CMAPSS_DATA", ROOT / "data" / "CMAPSSData"))
 RESULTS_DIR = ROOT / "results"
 MODELS_DIR = ROOT / "artifacts"
 VAL_FRACTION = 0.2
+CONFORMAL_ALPHA = 0.05
 
 
 def _commit() -> str:
@@ -97,6 +105,10 @@ def run(subset: str, seed: int, epochs: int = 80, batch_size: int = 128, learnin
 
     pred_test = predict(X_test)
     mc_mean, mc_std = mc_dropout_predict(model, X_test, passes=mc_passes, scale=RUL_CAP)
+    # After the test passes, so the test draws match runs made before calibration existed.
+    pred_val = predict(X_val)
+    _, val_std = mc_dropout_predict(model, X_val, passes=mc_passes, scale=RUL_CAP, batch_size=2048, compiled=True)
+    q = conformal_scale(y_val, pred_val, val_std, CONFORMAL_ALPHA)
 
     baseline = Ridge(alpha=1.0).fit(window_features(X_fit), y_fit)
     baseline_test = np.clip(baseline.predict(window_features(X_test)), 0, None)
@@ -126,7 +138,13 @@ def run(subset: str, seed: int, epochs: int = 80, batch_size: int = 128, learnin
             "mc_coverage_2sd": interval_coverage(y_test, mc_mean, mc_std, 2.0),
             "mc_coverage_2sd_capped_truth": interval_coverage(np.minimum(y_test, RUL_CAP), mc_mean, mc_std, 2.0),
             "mc_mean_std": float(mc_std.mean()),
+            "conformal_coverage": interval_coverage(y_test, pred_test, mc_std, q),
+            "conformal_coverage_capped_truth": interval_coverage(np.minimum(y_test, RUL_CAP), pred_test, mc_std, q),
+            "conformal_mean_halfwidth": float(q * mc_std.mean()),
         },
+        "calibration": {"method": "split conformal on validation windows, score |target - prediction| / mc_std",
+                        "alpha": CONFORMAL_ALPHA, "scale": q, "windows": int(len(X_val)),
+                        "validation_coverage": interval_coverage(y_val, pred_val, val_std, q)},
         "validation": {"ridge_baseline_rmse": rmse(y_val, baseline_val)},
         "per_engine": {"engine": test_engines.tolist(), "true": y_test.tolist(), "pred": pred_test.round(2).tolist(),
                        "mc_std": mc_std.round(2).tolist()},
@@ -153,6 +171,7 @@ def main():
     print(f"{args.subset} seed {args.seed}: test RMSE {test['hybrid']['rmse']:.2f} "
           f"(capped truth {test['hybrid']['rmse_capped_truth']:.2f}), PHM08 {test['hybrid']['phm08_score']:.0f}; "
           f"ridge baseline RMSE {test['ridge_baseline']['rmse']:.2f}; MC ±2σ coverage {test['mc_coverage_2sd']:.0%}; "
+          f"conformal 95% coverage {test['conformal_coverage_capped_truth']:.0%} (capped truth); "
           f"{result['training']['epochs_run']} epochs in {result['training']['seconds']:.0f}s")
 
 
