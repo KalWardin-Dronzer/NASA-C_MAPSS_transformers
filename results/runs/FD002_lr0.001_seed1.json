@@ -54,7 +54,7 @@
  "training": {
   "epochs_run": 12,
   "best_epoch": 2,
-  "seconds": 324.0,
+  "seconds": 289.1,
   "val_rmse": 17.201214873833102
  },
  "test": {
@@ -78,7 +78,17 @@
   },
   "mc_coverage_2sd": 0.6332046332046332,
   "mc_coverage_2sd_capped_truth": 0.7992277992277992,
-  "mc_mean_std": 7.166682243347168
+  "mc_mean_std": 7.166682243347168,
+  "conformal_coverage": 0.888030888030888,
+  "conformal_coverage_capped_truth": 0.9691119691119691,
+  "conformal_mean_halfwidth": 35.00149917602539
+ },
+ "calibration": {
+  "method": "split conformal on validation windows, score |target - prediction| / mc_std",
+  "alpha": 0.05,
+  "scale": 4.883919569217772,
+  "windows": 9859,
+  "validation_coverage": 0.9501977888223958
  },
  "validation": {
   "ridge_baseline_rmse": 18.39122772216797
@@ -1133,6 +1143,6 @@
   "python": "3.11.3",
   "tensorflow": "2.21.0",
   "keras": "3.15.1",
-  "commit": "2b6e3fb418d99d6a54509eb77edd249e12a53465"
+  "commit": "17b00106d9e3af10b38a3688f3f7152c86cf98c4"
  }
 }

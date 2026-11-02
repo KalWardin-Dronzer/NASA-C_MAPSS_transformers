@@ -1,8 +1,8 @@
 # NASA C-MAPSS: remaining useful life with a CNN–LSTM–Transformer
 
 Predicts how many operating cycles a turbofan engine has left from its last 30 cycles of sensor readings, on NASA's
-C-MAPSS run-to-failure simulations. One model per subset, a validation split by engine, a linear baseline, three
-seeds, and every number below regenerated from saved run files.
+C-MAPSS run-to-failure simulations, with a calibrated 95% interval around each prediction. One model per subset, a
+validation split by engine, a linear baseline, three seeds, and every number below regenerated from saved run files.
 
 This is a rebuild of a course project. The original notebook spliced different engines together, leaked its
 validation split and reported a test score with no code behind it. [What the rebuild fixed](#what-the-rebuild-fixed)
@@ -35,17 +35,20 @@ What the numbers say:
   more than 125 cycles left (up to 195), and a model trained on capped targets tops out near 125 (its highest
   prediction is 134): the flat ceiling in the figure. Those engines also account for most of the PHM08 score on these
   two subsets.
-- **The uncertainty estimates are not calibrated.** Monte Carlo dropout ±2σ intervals contain the true value for
-  46–80% of test engines, depending on subset and seed, not the ~95% a calibrated interval would. Read them as
-  relative confidence, not as intervals.
+- **The 95% intervals hold on the test set once calibrated.** Raw Monte Carlo dropout ±2σ intervals contained the
+  true value for only 46–80% of test engines. Rescaled by split conformal calibration on the validation engines,
+  they cover 91–97% of test engines in every run, against the capped truth they were calibrated for. They are
+  narrowest where it matters: about ±15 cycles when the model predicts failure within 30 cycles, and about ±38 when
+  it predicts 100 or more. Against the official truth, coverage on FD002 and FD004 drops to 86% and 80%, because of
+  the engines above the cap.
 
 No comparison with published results is claimed: papers differ in window length, cap, normalisation and which test
 engines they score.
 
 ![Predicted vs true remaining life for every test engine](results/test_predictions.png)
 
-*Every official test engine, sorted by true remaining life. Seed 1 of the selected configuration; bars are ±2σ over
-50 dropout passes.*
+*Every official test engine, sorted by true remaining life. Seed 1 of the selected configuration; bars are the
+conformal 95% intervals.*
 
 ## What the rebuild fixed
 
@@ -71,9 +74,12 @@ engines they score.
   FD004 against official truth only; both are in the full results.
 - **Test scoring.** The last 30-cycle window of each official test engine, against the official remaining life and
   its capped variant.
-- **Uncertainty.** 50 forward passes with dropout left on.
-- **Reproducibility.** Seeds are fixed and TensorFlow op determinism is on. Re-running all twelve 1e-3 runs reproduced
-  every saved prediction exactly (same machine, CPU).
+- **Uncertainty.** 50 forward passes with dropout left on give each prediction a spread σ. Split conformal
+  calibration turns it into an interval: on every validation window, score |target − prediction| / σ; take the
+  conformal 95% quantile q; report prediction ± q·σ on test. The method was committed before any calibrated test
+  coverage was computed.
+- **Reproducibility.** Seeds are fixed and TensorFlow op determinism is on. The twelve 1e-3 runs have been run three
+  times (the third to add calibration), and every saved prediction matched exactly (same machine, CPU).
 
 ## Run it
 
@@ -97,7 +103,7 @@ CPU.
 ```
 cmapss/data.py      loading, engine keys, per-condition scaling, windows, engine split
 cmapss/model.py     the CNN–LSTM–Transformer and MC-dropout prediction
-cmapss/metrics.py   RMSE, MAE, PHM08 score, interval coverage
+cmapss/metrics.py   RMSE, MAE, PHM08 score, conformal scale, interval coverage
 cmapss/train.py     one subset and seed -> results/runs/*.json
 cmapss/report.py    results/runs -> results/RESULTS.md and the figure
 tests/              data handling, metrics, model, learning-rate selection
@@ -108,8 +114,11 @@ legacy/             the original notebook and slides
 
 - Predictions stay close to the 125-cycle cap, so engines with much longer remaining life are underestimated by
   construction of the target.
-- The uncertainty intervals are too narrow (see above). Calibrating them on the validation engines, for example with
-  conformal prediction, is the obvious next step and has not been done.
+- The 95% is a rate across engines, not a promise for each one. Windows from the same validation engine are
+  correlated, and the validation engines also chose the early-stopping epoch, so the guarantee is approximate; one
+  run of twelve came in at 91%.
+- The intervals are wide early in an engine's life (about ±38 cycles), so they say more near failure than far from
+  it.
 - Validation loss bottoms out early (best epoch 2–14 at the selected rate), and apart from the two learning rates
   there was no hyperparameter search.
 - Three seeds per configuration. On FD003 the spread between seeds (±1.9 cycles) is comparable to the gap to the

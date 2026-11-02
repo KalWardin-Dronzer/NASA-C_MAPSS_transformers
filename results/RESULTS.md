@@ -24,13 +24,32 @@ One model per subset and seed, scored on each official test engine's last window
 | FD004, 0.001 (selected) | 3 | 15.91 ± 1.37 | 27.17 ± 0.75 | 30.48 ± 0.08 | 16.49 ± 0.38 | 19.54 ± 0.03 | 5236 ± 631 | 1715 ± 695 | 49 ± 4% |
 | FD004, 0.0001 | 3 | 16.87 ± 1.12 | 26.63 ± 0.33 | 30.48 ± 0.08 | 17.55 ± 1.51 | 19.54 ± 0.03 | 5258 ± 805 | 2805 ± 1219 | 55 ± 6% |
 
+## Uncertainty (selected configuration)
+
+Monte Carlo dropout spreads are too narrow on their own. Split conformal calibration on the validation engines rescales them: q is the conformal 95% quantile of |target − prediction| / std over validation windows, and each test interval is prediction ± q·std. Validation targets are capped at 125, so coverage of the capped truth is what the calibration aims at.
+
+| Subset | MC ±2σ coverage | Conformal scale q | Test coverage (capped truth) | Test coverage (official truth) | Mean interval half-width |
+|---|---|---|---|---|---|
+| FD001 | 75 ± 5% | 3.91 ± 0.36 | 96 ± 1% | 96 ± 1% | 30.8 ± 1.3 cycles |
+| FD002 | 61 ± 5% | 4.25 ± 0.58 | 95 ± 2% | 86 ± 2% | 31.0 ± 3.5 cycles |
+| FD003 | 69 ± 3% | 3.60 ± 0.74 | 94 ± 1% | 93 ± 1% | 28.1 ± 7.2 cycles |
+| FD004 | 49 ± 4% | 4.30 ± 0.54 | 94 ± 3% | 80 ± 4% | 31.5 ± 4.6 cycles |
+
+By the model's own prediction, all subsets and seeds pooled (each test engine counted once per seed):
+
+| Predicted remaining life | Engine predictions | Mean interval half-width | Coverage (capped truth) |
+|---|---|---|---|
+| under 30 cycles | 452 | 15.2 cycles | 97% |
+| 30 to 100 cycles | 732 | 31.2 cycles | 94% |
+| 100 or more | 937 | 37.9 cycles | 94% |
+
 ## Data and training (selected configuration)
 
 | Subset | Train / val / test engines | Test engines shorter than the window | Test engines above the cap | Train windows | Conditions | Features | Best epoch | Training time |
 |---|---|---|---|---|---|---|---|---|
 | FD001 | 80 / 20 / 100 | 0 | 11 | 14,210 | 1 | 15 | 5 ± 2 | 2 ± 1 min |
-| FD002 | 208 / 52 / 259 | 6 | 57 | 36,360 | 6 | 23 | 3 ± 1 | 6 ± 1 min |
-| FD003 | 80 / 20 / 100 | 0 | 15 | 17,687 | 1 | 16 | 8 ± 6 | 4 ± 2 min |
-| FD004 | 199 / 50 / 248 | 11 | 67 | 43,143 | 6 | 23 | 2 ± 1 | 6 ± 1 min |
+| FD002 | 208 / 52 / 259 | 6 | 57 | 36,360 | 6 | 23 | 3 ± 1 | 5 ± 1 min |
+| FD003 | 80 / 20 / 100 | 0 | 15 | 17,687 | 1 | 16 | 8 ± 6 | 2 ± 1 min |
+| FD004 | 199 / 50 / 248 | 11 | 67 | 43,143 | 6 | 23 | 2 ± 1 | 5 ± 0 min |
 
-Window 30 cycles, RUL cap 125, 20% of training engines held out for early stopping, batch 128, 50 MC-dropout passes. TensorFlow 2.21.0, Keras 3.15.1, Python 3.11.3, CPU. Runs produced by commit 2b6e3fb.
+Window 30 cycles, RUL cap 125, 20% of training engines held out for early stopping, batch 128, 50 MC-dropout passes. TensorFlow 2.21.0, Keras 3.15.1, Python 3.11.3, CPU. Runs produced by commit 17b0010, 2b6e3fb.

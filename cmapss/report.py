@@ -97,18 +97,30 @@ def render(runs: dict[str, dict[float, list[dict]]]) -> str:
                   "validation engines rescales them: q is the conformal 95% quantile of |target − prediction| / std "
                   "over validation windows, and each test interval is prediction ± q·std. Validation targets are "
                   "capped at 125, so coverage of the capped truth is what the calibration aims at.", "",
-                  "| Subset | MC ±2σ coverage | Conformal scale q | Validation coverage | Test coverage (capped truth) "
+                  "| Subset | MC ±2σ coverage | Conformal scale q | Test coverage (capped truth) "
                   "| Test coverage (official truth) | Mean interval half-width |",
-                  "|---|---|---|---|---|---|---|"]
+                  "|---|---|---|---|---|---|"]
         for subset, results in calibrated.items():
             t = [r["test"] for r in results]
             lines.append(
                 f"| {subset} | {_ms([100 * x['mc_coverage_2sd'] for x in t], 0)}% "
                 f"| {_ms([r['calibration']['scale'] for r in results])} "
-                f"| {_ms([100 * r['calibration']['validation_coverage'] for r in results], 1)}% "
                 f"| {_ms([100 * x['conformal_coverage_capped_truth'] for x in t], 0)}% "
                 f"| {_ms([100 * x['conformal_coverage'] for x in t], 0)}% "
                 f"| {_ms([x['conformal_mean_halfwidth'] for x in t], 1)} cycles |")
+        lines += ["", "By the model's own prediction, all subsets and seeds pooled (each test engine counted once per seed):", "",
+                  "| Predicted remaining life | Engine predictions | Mean interval half-width | Coverage (capped truth) |",
+                  "|---|---|---|---|"]
+        for lo, hi, name in [(0, 30, "under 30 cycles"), (30, 100, "30 to 100 cycles"), (100, np.inf, "100 or more")]:
+            width, hit = [], []
+            for results in calibrated.values():
+                for r in results:
+                    true, pred, std = (np.asarray(r["per_engine"][k], float) for k in ("true", "pred", "mc_std"))
+                    half = r["calibration"]["scale"] * std
+                    band = (pred >= lo) & (pred < hi)
+                    width += list(half[band])
+                    hit += list(np.abs(np.minimum(true, RUL_CAP) - pred)[band] <= half[band])
+            lines.append(f"| {name} | {len(width)} | {np.mean(width):.1f} cycles | {100 * np.mean(hit):.0f}% |")
     lines += ["", "## Data and training (selected configuration)", "",
               "| Subset | Train / val / test engines | Test engines shorter than the window | Test engines above "
               "the cap | Train windows | Conditions | Features | Best epoch | Training time |",
